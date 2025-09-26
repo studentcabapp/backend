@@ -1,7 +1,7 @@
 import { createServer } from 'http';
-import { Server } from 'socket.io';
 import app from './src/app.js';
-import { initSocket } from './src/sockets/sockets.js';
+import { Server } from 'socket.io';
+import {initSocket} from './src/sockets/sockets.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -14,9 +14,8 @@ const io = new Server(server, {
   },
 });
 
-initSocket(io);
+initSocket(io); // Initialize socket handlers
 
 server.listen(PORT, () => {
   console.log(`✅ Server is running on port ${PORT}`);
 });
-

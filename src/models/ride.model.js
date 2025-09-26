@@ -33,7 +33,7 @@ const rideSchema = new mongoose.Schema({
 
   // seat & pricing
   seatsAvailable: { type: Number, required: true },
-  totalSeats: { type: Number }, // optional total seats (mirror of car.seats or driver-set)
+  totalSeats: { type: Number }, 
   pricePerSeat: { type: Number, required: true },
 
   // extras & preferences

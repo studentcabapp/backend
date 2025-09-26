@@ -1,7 +1,7 @@
 import jwt from 'jsonwebtoken';
 
-const ACCESS_TOKEN_EXP = '15m';
-const REFRESH_TOKEN_EXP = '7d';
+const ACCESS_TOKEN_EXP = '7d';
+const REFRESH_TOKEN_EXP = '90d';
 
 export const signAccess = (user) => {
   return jwt.sign(

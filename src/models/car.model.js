@@ -10,7 +10,6 @@ const carSchema = new mongoose.Schema({
   seats: { type: Number, default: 4 },
   color: { type: String },
   ac: { type: Boolean, default: true },
-  photoUrl: { type: String },
   createdAt: { type: Date, default: () => new Date() }
 });
 

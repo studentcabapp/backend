@@ -262,8 +262,8 @@ export const searchRides = async (req, res) => {
     const end = date ? new Date(new Date(date).getTime() + 24 * 60 * 60 * 1000) : new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     const rides = await Ride.find({
-      fromCity: from,
-      toCity: to,
+      fromCity: from.toLowerCase(),
+      toCity: to.toLowerCase(),
       pickupTime: { $gte: start, $lte: end },
       status: "active"
     })
@@ -286,18 +286,27 @@ export const getRideDetails = async (req, res) => {
 
     const ride = await Ride.findById(rideId)
       .populate("car")
-      .populate("driver", "username photo rating bio email")
+      .populate("driver", "username photo rating bio email isVerified")
       .populate({
         path: "bookings",
-        populate: { path: "passenger", select: "name photo rating" }
+        populate: { path: "passenger", select: "firstname username photo rating" }
       });
+      // console.log(ride);
+      if (!ride) return res.status(404).json({ error: "Ride not found" });
 
-    if (!ride) return res.status(404).json({ error: "Ride not found" });
+      // Filter bookings to only confirmed status
+      const confirmedBookings = ride.bookings.filter(b => b.status === "confirmed");
 
-    // fetch driver reviews
-    const reviews = await Review.find({ reviewee: ride.driver._id })
-      .populate("reviewer", "name photo")
-      .sort({ createdAt: -1 });
+      // Then map these confirmed bookings to passengers for response:
+      const passengers = confirmedBookings.map(b => ({
+        id: b.passenger._id,
+        firstname: b.passenger.firstname,
+        username: b.passenger.username,
+        photo: b.passenger.photo,
+        rating: b.passenger.rating,
+        seatsBooked: b.seatsBooked,
+        status: b.status
+      }));
 
     res.json({
       rideId: ride._id,
@@ -307,7 +316,8 @@ export const getRideDetails = async (req, res) => {
         photo: ride.driver.photo,
         rating: ride.driver.rating,
         bio: ride.driver.bio,
-        email: ride.driver.email
+        email: ride.driver.email,
+        isVerified: ride.driver.isVerified,
       },
       car: ride.car ? {
         make: ride.car.make,
@@ -333,15 +343,7 @@ export const getRideDetails = async (req, res) => {
       instructions: ride.instructions,
       bookingMode: ride.bookingMode,
       status: ride.status,
-      passengers: ride.bookings.map(b => ({
-        id: b.passenger._id,
-        name: b.passenger.name,
-        photo: b.passenger.photo,
-        rating: b.passenger.rating,
-        seatsBooked: b.seatsBooked,
-        status: b.status
-      })),
-      reviews
+      passengers: passengers
     });
   } catch (err) {
     console.error("getRideDetails error:", err);
@@ -355,42 +357,66 @@ export const bookRide = async (req, res) => {
   const seats = parseInt(req.body.seats || 1);
 
   try {
-    // create booking document first (status pending or confirmed depending on bookingMode later)
+    // create booking document first (always created)
     const booking = new Booking({
       ride: rideId,
       passenger: req.user.id,
       seatsBooked: seats,
-      status: "pending"
+      status: "pending" // initial status pending by default
     });
     await booking.save();
 
-    // try to decrement seats atomically and attach booking id
-    const ride = await Ride.findOneAndUpdate(
-      { _id: rideId, seatsAvailable: { $gte: seats }, status: "active" },
-      {
-        $inc: { seatsAvailable: -seats },
-        $push: { bookings: booking._id }
-      },
-      { new: true }
-    );
+    // Fetch the ride to check booking mode before decrementing seats
+    const ride = await Ride.findById(rideId);
 
-    if (!ride) {
-      // not enough seats or ride not active — rollback booking doc
+    if (!ride || ride.status !== "active") {
+      // ride not found or not active
       await Booking.findByIdAndDelete(booking._id);
-      return res.status(400).json({ error: "Not enough seats or ride not available" });
+      return res.status(400).json({ error: "Ride not available or not active" });
     }
 
-    // set booking status based on ride.bookingMode
-    booking.status = ride.bookingMode === "direct" ? "confirmed" : "pending";
-    await booking.save();
+    if (ride.bookingMode === "direct") {
+      // direct booking: decrement seats atomically and attach booking id
+      const updatedRide = await Ride.findOneAndUpdate(
+        { _id: rideId, seatsAvailable: { $gte: seats }, status: "active" },
+        {
+          $inc: { seatsAvailable: -seats },
+          $push: { bookings: booking._id }
+        },
+        { new: true }
+      );
 
-    // notify driver & passenger...
-    res.status(201).json({ booking });
+      if (!updatedRide) {
+        // not enough seats or ride not active — rollback booking doc
+        await Booking.findByIdAndDelete(booking._id);
+        return res.status(400).json({ error: "Not enough seats or ride not available" });
+      }
+
+      // if seats reached zero, update status to full
+      if (updatedRide.seatsAvailable === 0) {
+        updatedRide.status = "full";
+        await updatedRide.save();
+      }
+
+      booking.status = "confirmed";
+      await booking.save();
+
+      return res.status(200).json({ booking });
+    } else {
+      // manual booking mode: seats not decremented here, booking stays pending
+      // booking.status is already "pending" from creation
+      // Add booking id to ride.bookings array without decrementing seats
+      ride.bookings.push(booking._id);
+      await ride.save();
+
+      return res.status(200).json({ booking });
+    }
   } catch (err) {
     console.error("bookRide err", err);
     res.status(500).json({ error: err.message });
   }
 };
+
 
 export const rejectBooking = async (req, res) => {
   const { bookingId } = req.params;
@@ -500,22 +526,39 @@ export const listPassengers = async (req, res) => {
 export const cancelBooking = async (req, res) => {
   try {
     const { rideId } = req.params;
-    const booking = await Booking.findOneAndUpdate(
-      { ride: rideId, passenger: req.user.id, status: { $ne: "cancelled" } },
-      { status: "cancelled" },
-      { new: true }
-    );
 
-    if (!booking) return res.status(404).json({ error: "Booking not found or already cancelled" });
+    // Find the booking that is not cancelled yet
+    const booking = await Booking.findOne({
+      ride: rideId,
+      passenger: req.user.id,
+      status: { $ne: "cancelled" }
+    });
 
-    // return seats
-    const ride = await Ride.findById(rideId);
-    if (ride) {
-      ride.seatsAvailable += booking.seatsBooked;
-      await ride.save();
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found or already cancelled" });
     }
 
-    // notify driver
+    if (booking.status === "confirmed") {
+      // If confirmed, add seats back and potentially change ride status
+      const ride = await Ride.findById(rideId);
+      if (ride) {
+        ride.seatsAvailable += booking.seatsBooked;
+
+        // If ride is full but seats are now available, revert status to active
+        if (ride.status === "full" && ride.seatsAvailable > 0) {
+          ride.status = "active";
+        }
+
+        await ride.save();
+      }
+    }
+
+    // Update booking status to cancelled in all cases
+    booking.status = "cancelled";
+    await booking.save();
+
+    // Notify driver about cancellation
+    const ride = await Ride.findById(rideId).populate("driver");
     sendInAppNotification(req, ride.driver, {
       type: "booking_cancelled",
       rideId: ride._id,
@@ -538,16 +581,55 @@ export const listMyBookings = async (req, res) => {
         path: "ride",
         populate: { path: "driver", select: "name photo rating" }
       })
+      .populate("passenger", "name photo");
+
+    const rides = await Ride.find({ driver: req.user.id })
+      .populate("driver", "name photo rating")
       .sort({ createdAt: -1 });
 
-    res.json(bookings);
+    // Map bookings to required shape
+    const mappedBookings = bookings.map(({ ride, status, createdAt, passenger }) => ({
+      rideid: ride?._id.toString(),
+      driver:false,
+      fromCity: ride?.fromCity,
+      toCity: ride?.toCity,
+      pickupLocation: ride?.pickupLocation,
+      dropoffLocation: ride?.dropoffLocation,
+      date: createdAt,
+      pickupTime: ride?.pickupTime,
+      reachTime: ride?.reachTime,
+      status,
+      price: ride?.pricePerSeat,
+      id: passenger?._id.toString(), 
+    }));
+
+    // Map rides to required shape
+    const mappedRides = rides.map((ride) => ({
+      rideid: ride._id.toString(),
+      driver:true,
+      fromCity: ride.fromCity,
+      toCity: ride.toCity,
+      pickupLocation: ride.pickupLocation,
+      dropoffLocation: ride.dropoffLocation,
+      date: ride.createdAt,
+      pickupTime: ride.pickupTime,
+      reachTime: ride.reachTime,
+      status: ride.status,
+      price: ride.pricePerSeat,
+      id: ride.driver._id.toString(),
+    }));
+
+    // Combine and sort by date descending
+    const result = [...mappedBookings, ...mappedRides].sort(
+      (a, b) => new Date(b.date) - new Date(a.date)
+    );
+
+    res.json(result);
   } catch (err) {
     console.error("listMyBookings error:", err);
     res.status(500).json({ error: err.message });
   }
 };
-
-
 
 // Leave review (passenger -> driver)
 export const leaveReview = async (req, res) => {
@@ -586,5 +668,37 @@ export const listMyRides = async (req, res) => {
   } catch (err) {
     console.error("listMyRides error:", err);
     res.status(500).json({ error: err.message });
+  }
+};
+
+export const driverDetails = async (req, res) => {
+  try {
+    const { id } = req.params;  
+    const driver = await User.findById(id);
+    if (!driver) return res.status(404).json({ error: "Driver not found" });
+
+    const reviews = await Review.find({ reviewee: driver._id })
+      .populate("reviewer", "username photo")
+      .sort({ createdAt: -1 });
+
+    res.json({
+      id: driver._id,
+      name: driver.username,
+      photo: driver.photo,
+      rating: driver.rating,
+      bio: driver.bio,
+      tier: driver.tier,
+      isVerified: driver.isVerified,
+      reviews: reviews.map(r => ({
+        id: r._id,
+        reviewerName: r.reviewer?.username,
+        reviewerPhoto: r.reviewer?.photo,
+        comment: r.comment,
+        rating: r.rating,
+        createdAt: r.createdAt,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
 };

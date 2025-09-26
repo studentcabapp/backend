@@ -34,7 +34,7 @@ const userSchema = new mongoose.Schema(
 
     // Account Status
     isActive: { type: Boolean, default: true },
-    isVerified: { type: Boolean, default: false }, // email verified flag
+    isVerified: { type: Boolean, default: false },
 
     // Institution linking
     institutionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Institution', default: null },

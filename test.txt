@@ -1,0 +1,10 @@
+{
+  "identifier": "john_doe",
+  "password": "a"
+} // driver
+
+{
+  "username": "user",
+  "email": "abc@m.edu.in",
+  "password": "Secret123!"
+} // user 

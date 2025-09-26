@@ -10,6 +10,7 @@ const router = express.Router();
 // Passenger
 router.get("/rider/search", verifyToken, requireRoles('user','admin'), rideCtrl.searchRides);                           // done    // search rides
 router.get("/rider/me/bookings", verifyToken, requireRoles('user','admin'), rideCtrl.listMyBookings);                   // done    // passenger's bookings
+router.get("/rider/details/:id", verifyToken, rideCtrl.driverDetails);                                           // done    // get driver details
 router.get("/rider/:rideId", verifyToken, requireRoles('user','admin'), rideCtrl.getRideDetails);                       // done    // ride details
 router.post("/rider/:rideId/book", verifyToken, requireRoles('user','admin'), rideCtrl.bookRide);                       // done    // book ride
 router.post("/rider/:rideId/cancel", verifyToken, requireRoles('user','admin'), rideCtrl.cancelBooking);                // done    // cancel booking
