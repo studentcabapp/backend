@@ -189,19 +189,17 @@ export const deleteRide = async (req, res) => {
 
     // cancel all active bookings, notify passengers
     const passengerIds = [];
+
     const bookingUpdates = ride.bookings.map(async (b) => {
       if (b.status !== "cancelled") {
         const updated = await Booking.findByIdAndUpdate(b._id, { status: "cancelled" }, { new: true, session });
         passengerIds.push(b.passenger._id);
-        // TODO: add refund logic if payment already taken
         // send notification to this passenger
         sendInAppNotification(req, b.passenger._id, {
           type: "ride_cancelled",
           rideId: ride._id,
           message: `Your booking for ride ${ride.fromCity} → ${ride.toCity} on ${ride.pickupTime} was cancelled by the driver.`
         });
-
-        // optional email
         sendEmail(b.passenger.email, "Ride cancelled", `Your booking for ${ride.fromCity} → ${ride.toCity} was cancelled.`);
       }
     });
@@ -357,17 +355,21 @@ export const bookRide = async (req, res) => {
   const seats = parseInt(req.body.seats || 1);
 
   try {
+    const ride = await Ride.findById(rideId);
+
     // create booking document first (always created)
+    console.log(ride.driver);
     const booking = new Booking({
       ride: rideId,
       passenger: req.user.id,
+      driver: ride.driver,
       seatsBooked: seats,
-      status: "pending" // initial status pending by default
+      status: "pending" 
     });
     await booking.save();
 
     // Fetch the ride to check booking mode before decrementing seats
-    const ride = await Ride.findById(rideId);
+    // const ride = await Ride.findById(rideId);
 
     if (!ride || ride.status !== "active") {
       // ride not found or not active
@@ -394,7 +396,7 @@ export const bookRide = async (req, res) => {
 
       // if seats reached zero, update status to full
       if (updatedRide.seatsAvailable === 0) {
-        updatedRide.status = "full";
+        updatedRide.status = "paused";
         await updatedRide.save();
       }
 
@@ -416,7 +418,6 @@ export const bookRide = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
 
 export const rejectBooking = async (req, res) => {
   const { bookingId } = req.params;
@@ -545,7 +546,7 @@ export const cancelBooking = async (req, res) => {
         ride.seatsAvailable += booking.seatsBooked;
 
         // If ride is full but seats are now available, revert status to active
-        if (ride.status === "full" && ride.seatsAvailable > 0) {
+        if (ride.status === "paused" && ride.seatsAvailable > 0) {
           ride.status = "active";
         }
 
@@ -563,7 +564,7 @@ export const cancelBooking = async (req, res) => {
       type: "booking_cancelled",
       rideId: ride._id,
       bookingId: booking._id,
-      message: `${req.user.name} cancelled their booking.`
+      message: `${req.user.id} cancelled their booking.`
     });
 
     res.json({ booking });
