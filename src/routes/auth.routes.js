@@ -5,6 +5,9 @@ import * as adminCtrl from '../controllers/admin.controller.js';
 import * as domainCtrl from '../controllers/domain.controller.js';
 import { verifyToken, requireRoles, ipRateLimiter } from '../middlewares/auth.middleware.js';
 
+import { sendEmailCode, verifyEmailCode } from '../controllers/emailVerify.controller.js';
+import { ipLimiter, sendCodeLimiter } from '../middlewares/rateLimiters.js';
+
 const router = express.Router();
 
 // ---------- Public routes ----------
@@ -39,5 +42,12 @@ router.post('/admin/reject-domain', verifyToken, requireRoles('admin'), adminCtr
 
 router.get('/admin/institutions', verifyToken, requireRoles('admin'), adminCtrl.listInstitutions);
 router.post('/admin/institutions', verifyToken, requireRoles('admin'), adminCtrl.addInstitution);
+
+
+// GET /auth/verify-email/send
+router.get('/verify-email/send', verifyToken, ipLimiter, sendCodeLimiter, sendEmailCode);
+
+// POST /auth/verify-email/confirm
+router.post('/verify-email/confirm', verifyToken, ipLimiter, verifyEmailCode);
 
 export default router;
